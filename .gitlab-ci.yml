@@ -1,0 +1,2204 @@
+image: cloudbees/java-with-docker-client:8-jdk-18.06.1-ce
+
+cache:
+  key: "$CI_PROJECT_ID"
+  untracked: false
+  paths:
+  - ".m2"
+
+services:
+- name: docker:18.09.7-dind
+  command: ["--insecure-registry=todo_nexus_server:8888"]
+
+variables:
+  MAVEN_USER_HOME: .m2
+  MAVEN_OPTS: >-
+    -Duser.home=$CI_PROJECT_DIR
+    -Dhttp.proxyHost=todo_proxy_server
+    -Dhttp.proxyPort=80
+    -Dhttps.proxyHost=todo_proxy_server
+    -Dhttps.proxyPort=80
+    -Dhttp.nonProxyHosts=todo_nexus_server
+  DOCKER_HOST: tcp://docker:2375
+  HTTPS_PROXY: http://todo_proxy_server:80
+  HTTP_PROXY: http://todo_proxy_server:80
+  NO_PROXY: todo_test_server-kube-master-01,todo_nexus_server,docker
+  K8S_SERVER: https://todo_test_server-kube-master-01:6443
+
+before_script:
+- mkdir -p ${MAVEN_USER_HOME}
+- cp $CI_PROJECT_DIR/m2_settings.xml ${MAVEN_USER_HOME}/settings.xml
+- sed -i'' -r 's|NEXUS_USER|'$NEXUS_USER'|g' ${MAVEN_USER_HOME}/settings.xml
+- sed -i'' -r 's|NEXUS_PASSWORD|'$NEXUS_PASSWORD'|g' ${MAVEN_USER_HOME}/settings.xml
+
+stages:
+- build_common
+- build
+- install
+- update
+- delete
+- del_ES_index
+- new_ES_index
+
+Build:
+  stage: build_common
+  script:
+  - "./mvnw clean verify"
+  except:
+  - tags
+
+Build snapshot:
+  stage: build_common
+  script:
+  - "./mvnw clean deploy --projects topic,api --also-make"
+  when: manual
+  except:
+  - tags
+
+Build chart snapshot:
+  stage: build_common
+  image: todo_nexus_server:8888/todo-repo-name/k8s-helm:v2.13.1
+  before_script:
+  - helm repo add nexus-snapshots http://todo_nexus_server:8081/repository/helm-snapshots/
+  script:
+  - helm nexus-push nexus-snapshots helm/orders --username "$NEXUS_USER" --password "$NEXUS_PASSWORD"
+  when: manual
+  except:
+  - tags
+
+Build release:
+  stage: build_common
+  script:
+  - "./mvnw clean deploy"
+  only:
+  - tags
+
+Build chart release:
+  stage: build_common
+  image: todo_nexus_server:8888/todo-repo-name/k8s-helm:v2.13.1
+  before_script:
+  - helm repo add nexus-releases http://todo_nexus_server:8081/repository/helm-releases/
+  script:
+  - helm nexus-push nexus-releases helm/orders --username "$NEXUS_USER" --password "$NEXUS_PASSWORD"
+  only:
+  - tags
+
+.build_template: &build_def
+  stage: build
+  script:
+    - "./mvnw clean deploy"
+  when: manual
+
+.install_template: &install_def
+  stage: install
+  image: todo_nexus_server:8888/todo-repo-name/k8s-helm:v2.13.1
+  before_script:
+    - sed -i'' -r 's|K8S_TOKEN|'$K8S_TOKEN'|g' ${CI_PROJECT_DIR}/kube_config
+    - helm repo add nexus-snapshots http://todo_nexus_server:8081/repository/helm-snapshots/
+  script:
+    - "helm install --debug nexus-snapshots/orders
+      --kubeconfig ${CI_PROJECT_DIR}/kube_config
+      --name orders-${CI_ENVIRONMENT_NAME}
+      --namespace ${CI_ENVIRONMENT_NAME}
+      --set-file config=${CI_PROJECT_DIR}/impl/src/main/resources/application-k8s-test.conf
+      --set ingress.host=todo_test_server-kube-${CI_ENVIRONMENT_NAME}
+      --set kafka.brokers=kafka-${CI_ENVIRONMENT_NAME}:9092
+      --set image.tag=${DOCKER_IMAGE_VERSION}
+      --set java.debugEnabled=true
+      --set dbUrl=${DB_URL}
+      --set elasticSearchHost=reactive-sandbox-${CI_ENVIRONMENT_NAME}-reactive-sandbox-elasticsearch.${CI_ENVIRONMENT_NAME}
+      --set elasticSearchPort=9200
+      --set cassandraUrl=_cql._tcp.reactive-sandbox-${CI_ENVIRONMENT_NAME}-reactive-sandbox-cassandra.${CI_ENVIRONMENT_NAME}
+      --set nonProxyHosts=${NON_PROXY_HOSTS}"
+  when: manual
+
+.update_template: &update_def
+  stage: update
+  image: todo_nexus_server:8888/todo-repo-name/k8s-helm:v2.13.1
+  before_script:
+  - sed -i'' -r 's|K8S_TOKEN|'$K8S_TOKEN'|g' ${CI_PROJECT_DIR}/kube_config
+  - helm repo add nexus-snapshots http://todo_nexus_server:8081/repository/helm-snapshots/
+  script:
+  - "helm upgrade --debug orders-${CI_ENVIRONMENT_NAME} nexus-snapshots/orders
+      --kubeconfig ${CI_PROJECT_DIR}/kube_config
+      --namespace ${CI_ENVIRONMENT_NAME}
+      --set-file config=${CI_PROJECT_DIR}/impl/src/main/resources/application-k8s-test.conf
+      --set ingress.host=todo_test_server-kube-${CI_ENVIRONMENT_NAME}
+      --set kafka.brokers=kafka-${CI_ENVIRONMENT_NAME}:9092
+      --set image.tag=${DOCKER_IMAGE_VERSION}
+      --set java.debugEnabled=true
+      --set dbUrl=${DB_URL}
+      --set elasticSearchHost=reactive-sandbox-${CI_ENVIRONMENT_NAME}-reactive-sandbox-elasticsearch.${CI_ENVIRONMENT_NAME}
+      --set elasticSearchPort=9200
+      --set cassandraUrl=_cql._tcp.reactive-sandbox-${CI_ENVIRONMENT_NAME}-reactive-sandbox-cassandra.${CI_ENVIRONMENT_NAME}
+      --set nonProxyHosts=${NON_PROXY_HOSTS}"
+  when: manual
+
+.delete_template: &delete_def
+  stage: delete
+  image: todo_nexus_server:8888/todo-repo-name/k8s-helm:v2.13.1
+  before_script:
+  - sed -i'' -r 's|K8S_TOKEN|'$K8S_TOKEN'|g' ${CI_PROJECT_DIR}/kube_config
+  script:
+  - helm delete --purge --kubeconfig ${CI_PROJECT_DIR}/kube_config orders-${CI_ENVIRONMENT_NAME}
+  when: manual
+
+.del_ES_index_template: &del_ES_index_def
+  stage: del_ES_index
+  script:
+  - ./gitlab-ci/k8s_test_ES_delete_index.sh
+  when: manual
+
+.new_ES_index_template: &new_ES_index_def
+  stage: new_ES_index
+  script:
+  - ./gitlab-ci/k8s_test_ES_create_index.sh
+  when: manual
+
+.namespace_test11: &namespace_test11_def
+  environment:
+    name: test11
+  variables:
+    DOCKER_IMAGE_VERSION: 11-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-1:1521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test11-reactive-sandbox-elasticsearch.test11|*.todo_inner_net.ru"
+
+.namespace_test12: &namespace_test12_def
+  environment:
+    name: test12
+  variables:
+    DOCKER_IMAGE_VERSION: 12-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-1:2521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test12-reactive-sandbox-elasticsearch.test12|*.todo_inner_net.ru"
+
+.namespace_test13: &namespace_test13_def
+  environment:
+    name: test13
+  variables:
+    DOCKER_IMAGE_VERSION: 13-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-1:3521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test13-reactive-sandbox-elasticsearch.test13|*.todo_inner_net.ru"
+
+.namespace_test14: &namespace_test14_def
+  environment:
+    name: test14
+  variables:
+    DOCKER_IMAGE_VERSION: 14-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-1:4521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test14-reactive-sandbox-elasticsearch.test14|*.todo_inner_net.ru"
+
+.namespace_test15: &namespace_test15_def
+  environment:
+    name: test15
+  variables:
+    DOCKER_IMAGE_VERSION: 15-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-1:5521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test15-reactive-sandbox-elasticsearch.test15|*.todo_inner_net.ru"
+
+.namespace_test16: &namespace_test16_def
+  environment:
+    name: test16
+  variables:
+    DOCKER_IMAGE_VERSION: 16-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-1:6521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test16-reactive-sandbox-elasticsearch.test16|*.todo_inner_net.ru"
+
+.namespace_test17: &namespace_test17_def
+  environment:
+    name: test17
+  variables:
+    DOCKER_IMAGE_VERSION: 17-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-1:7521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test17-reactive-sandbox-elasticsearch.test17|*.todo_inner_net.ru"
+
+.namespace_test18: &namespace_test18_def
+  environment:
+    name: test18
+  variables:
+    DOCKER_IMAGE_VERSION: 18-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-1:8521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test18-reactive-sandbox-elasticsearch.test18|*.todo_inner_net.ru"
+
+.namespace_test21: &namespace_test21_def
+  environment:
+    name: test21
+  variables:
+    DOCKER_IMAGE_VERSION: 21-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-2:1521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test21-reactive-sandbox-elasticsearch.test21|*.todo_inner_net.ru"
+
+.namespace_test22: &namespace_test22_def
+  environment:
+    name: test22
+  variables:
+    DOCKER_IMAGE_VERSION: 22-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-2:2521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test22-reactive-sandbox-elasticsearch.test22|*.todo_inner_net.ru"
+
+.namespace_test23: &namespace_test23_def
+  environment:
+    name: test23
+  variables:
+    DOCKER_IMAGE_VERSION: 23-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-2:3521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test23-reactive-sandbox-elasticsearch.test23|*.todo_inner_net.ru"
+
+.namespace_test24: &namespace_test24_def
+  environment:
+    name: test24
+  variables:
+    DOCKER_IMAGE_VERSION: 24-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-2:4521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test24-reactive-sandbox-elasticsearch.test24|*.todo_inner_net.ru"
+
+.namespace_test25: &namespace_test25_def
+  environment:
+    name: test25
+  variables:
+    DOCKER_IMAGE_VERSION: 25-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-2:5521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test25-reactive-sandbox-elasticsearch.test25|*.todo_inner_net.ru"
+
+.namespace_test26: &namespace_test26_def
+  environment:
+    name: test26
+  variables:
+    DOCKER_IMAGE_VERSION: 26-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-2:6521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test26-reactive-sandbox-elasticsearch.test26|*.todo_inner_net.ru"
+
+.namespace_test27: &namespace_test27_def
+  environment:
+    name: test27
+  variables:
+    DOCKER_IMAGE_VERSION: 27-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-2:7521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test27-reactive-sandbox-elasticsearch.test27|*.todo_inner_net.ru"
+
+.namespace_test28: &namespace_test28_def
+  environment:
+    name: test28
+  variables:
+    DOCKER_IMAGE_VERSION: 28-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-2:8521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test28-reactive-sandbox-elasticsearch.test28|*.todo_inner_net.ru"
+
+.namespace_test31: &namespace_test31_def
+  environment:
+    name: test31
+  variables:
+    DOCKER_IMAGE_VERSION: 31-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-3:1521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test31-reactive-sandbox-elasticsearch.test31|*.todo_inner_net.ru"
+
+.namespace_test32: &namespace_test32_def
+  environment:
+    name: test32
+  variables:
+    DOCKER_IMAGE_VERSION: 32-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-3:2521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test32-reactive-sandbox-elasticsearch.test32|*.todo_inner_net.ru"
+
+.namespace_test33: &namespace_test33_def
+  environment:
+    name: test33
+  variables:
+    DOCKER_IMAGE_VERSION: 33-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-3:3521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test33-reactive-sandbox-elasticsearch.test33|*.todo_inner_net.ru"
+
+.namespace_test34: &namespace_test34_def
+  environment:
+    name: test34
+  variables:
+    DOCKER_IMAGE_VERSION: 34-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-3:4521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test34-reactive-sandbox-elasticsearch.test34|*.todo_inner_net.ru"
+
+.namespace_test35: &namespace_test35_def
+  environment:
+    name: test35
+  variables:
+    DOCKER_IMAGE_VERSION: 35-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-3:5521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test35-reactive-sandbox-elasticsearch.test35|*.todo_inner_net.ru"
+
+.namespace_test36: &namespace_test36_def
+  environment:
+    name: test36
+  variables:
+    DOCKER_IMAGE_VERSION: 36-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-3:6521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test36-reactive-sandbox-elasticsearch.test36|*.todo_inner_net.ru"
+
+.namespace_test37: &namespace_test37_def
+  environment:
+    name: test37
+  variables:
+    DOCKER_IMAGE_VERSION: 37-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-3:7521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test37-reactive-sandbox-elasticsearch.test37|*.todo_inner_net.ru"
+
+.namespace_test38: &namespace_test38_def
+  environment:
+    name: test38
+  variables:
+    DOCKER_IMAGE_VERSION: 38-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-3:8521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test38-reactive-sandbox-elasticsearch.test38|*.todo_inner_net.ru"
+
+.namespace_test41: &namespace_test41_def
+  environment:
+    name: test41
+  variables:
+    DOCKER_IMAGE_VERSION: 41-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-4:1521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test41-reactive-sandbox-elasticsearch.test41|*.todo_inner_net.ru"
+
+.namespace_test42: &namespace_test42_def
+  environment:
+    name: test42
+  variables:
+    DOCKER_IMAGE_VERSION: 42-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-4:2521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test42-reactive-sandbox-elasticsearch.test42|*.todo_inner_net.ru"
+
+.namespace_test43: &namespace_test43_def
+  environment:
+    name: test43
+  variables:
+    DOCKER_IMAGE_VERSION: 43-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-4:3521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test43-reactive-sandbox-elasticsearch.test43|*.todo_inner_net.ru"
+
+.namespace_test44: &namespace_test44_def
+  environment:
+    name: test44
+  variables:
+    DOCKER_IMAGE_VERSION: 44-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-4:4521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test44-reactive-sandbox-elasticsearch.test44|*.todo_inner_net.ru"
+
+.namespace_test45: &namespace_test45_def
+  environment:
+    name: test45
+  variables:
+    DOCKER_IMAGE_VERSION: 45-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-4:5521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test45-reactive-sandbox-elasticsearch.test45|*.todo_inner_net.ru"
+
+.namespace_test46: &namespace_test46_def
+  environment:
+    name: test46
+  variables:
+    DOCKER_IMAGE_VERSION: 46-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-4:6521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test46-reactive-sandbox-elasticsearch.test46|*.todo_inner_net.ru"
+
+.namespace_test47: &namespace_test47_def
+  environment:
+    name: test47
+  variables:
+    DOCKER_IMAGE_VERSION: 47-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-4:7521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test47-reactive-sandbox-elasticsearch.test47|*.todo_inner_net.ru"
+
+.namespace_test48: &namespace_test48_def
+  environment:
+    name: test48
+  variables:
+    DOCKER_IMAGE_VERSION: 48-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-4:8521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test48-reactive-sandbox-elasticsearch.test48|*.todo_inner_net.ru"
+
+.namespace_test51: &namespace_test51_def
+  environment:
+    name: test51
+  variables:
+    DOCKER_IMAGE_VERSION: 51-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-5:1521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test51-reactive-sandbox-elasticsearch.test51|*.todo_inner_net.ru"
+
+.namespace_test52: &namespace_test52_def
+  environment:
+    name: test52
+  variables:
+    DOCKER_IMAGE_VERSION: 52-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-5:2521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test52-reactive-sandbox-elasticsearch.test52|*.todo_inner_net.ru"
+
+.namespace_test53: &namespace_test53_def
+  environment:
+    name: test53
+  variables:
+    DOCKER_IMAGE_VERSION: 53-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-5:3521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test53-reactive-sandbox-elasticsearch.test53|*.todo_inner_net.ru"
+
+.namespace_test54: &namespace_test54_def
+  environment:
+    name: test54
+  variables:
+    DOCKER_IMAGE_VERSION: 54-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-5:4521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test54-reactive-sandbox-elasticsearch.test54|*.todo_inner_net.ru"
+
+.namespace_test55: &namespace_test55_def
+  environment:
+    name: test55
+  variables:
+    DOCKER_IMAGE_VERSION: 55-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-5:5521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test55-reactive-sandbox-elasticsearch.test55|*.todo_inner_net.ru"
+
+.namespace_test56: &namespace_test56_def
+  environment:
+    name: test56
+  variables:
+    DOCKER_IMAGE_VERSION: 56-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-5:6521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test56-reactive-sandbox-elasticsearch.test56|*.todo_inner_net.ru"
+
+.namespace_test57: &namespace_test57_def
+  environment:
+    name: test57
+  variables:
+    DOCKER_IMAGE_VERSION: 57-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-5:7521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test57-reactive-sandbox-elasticsearch.test57|*.todo_inner_net.ru"
+
+.namespace_test58: &namespace_test58_def
+  environment:
+    name: test58
+  variables:
+    DOCKER_IMAGE_VERSION: 58-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-5:8521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test58-reactive-sandbox-elasticsearch.test58|*.todo_inner_net.ru"
+
+.namespace_test61: &namespace_test61_def
+  environment:
+    name: test61
+  variables:
+    DOCKER_IMAGE_VERSION: 61-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-6:1521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test61-reactive-sandbox-elasticsearch.test61|*.todo_inner_net.ru"
+
+.namespace_test62: &namespace_test62_def
+  environment:
+    name: test62
+  variables:
+    DOCKER_IMAGE_VERSION: 62-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-6:2521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test62-reactive-sandbox-elasticsearch.test62|*.todo_inner_net.ru"
+
+.namespace_test63: &namespace_test63_def
+  environment:
+    name: test63
+  variables:
+    DOCKER_IMAGE_VERSION: 63-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-6:3521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test63-reactive-sandbox-elasticsearch.test63|*.todo_inner_net.ru"
+
+.namespace_test64: &namespace_test64_def
+  environment:
+    name: test64
+  variables:
+    DOCKER_IMAGE_VERSION: 64-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-6:4521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test64-reactive-sandbox-elasticsearch.test64|*.todo_inner_net.ru"
+
+.namespace_test65: &namespace_test65_def
+  environment:
+    name: test65
+  variables:
+    DOCKER_IMAGE_VERSION: 65-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-6:5521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test65-reactive-sandbox-elasticsearch.test65|*.todo_inner_net.ru"
+
+.namespace_test66: &namespace_test66_def
+  environment:
+    name: test66
+  variables:
+    DOCKER_IMAGE_VERSION: 66-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-6:6521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test66-reactive-sandbox-elasticsearch.test66|*.todo_inner_net.ru"
+
+.namespace_test67: &namespace_test67_def
+  environment:
+    name: test67
+  variables:
+    DOCKER_IMAGE_VERSION: 67-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-6:7521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test67-reactive-sandbox-elasticsearch.test67|*.todo_inner_net.ru"
+
+.namespace_test68: &namespace_test68_def
+  environment:
+    name: test68
+  variables:
+    DOCKER_IMAGE_VERSION: 68-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-6:8521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test68-reactive-sandbox-elasticsearch.test68|*.todo_inner_net.ru"
+
+.namespace_test71: &namespace_test71_def
+  environment:
+    name: test71
+  variables:
+    DOCKER_IMAGE_VERSION: 71-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-7:1521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test71-reactive-sandbox-elasticsearch.test71|*.todo_inner_net.ru"
+
+.namespace_test72: &namespace_test72_def
+  environment:
+    name: test72
+  variables:
+    DOCKER_IMAGE_VERSION: 72-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-7:2521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test72-reactive-sandbox-elasticsearch.test72|*.todo_inner_net.ru"
+
+.namespace_test73: &namespace_test73_def
+  environment:
+    name: test73
+  variables:
+    DOCKER_IMAGE_VERSION: 73-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-7:3521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test73-reactive-sandbox-elasticsearch.test73|*.todo_inner_net.ru"
+
+.namespace_test74: &namespace_test74_def
+  environment:
+    name: test74
+  variables:
+    DOCKER_IMAGE_VERSION: 74-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-7:4521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test74-reactive-sandbox-elasticsearch.test74|*.todo_inner_net.ru"
+
+.namespace_test75: &namespace_test75_def
+  environment:
+    name: test75
+  variables:
+    DOCKER_IMAGE_VERSION: 75-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-7:5521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test75-reactive-sandbox-elasticsearch.test75|*.todo_inner_net.ru"
+
+.namespace_test76: &namespace_test76_def
+  environment:
+    name: test76
+  variables:
+    DOCKER_IMAGE_VERSION: 76-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-7:6521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test76-reactive-sandbox-elasticsearch.test76|*.todo_inner_net.ru"
+
+.namespace_test77: &namespace_test77_def
+  environment:
+    name: test77
+  variables:
+    DOCKER_IMAGE_VERSION: 77-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-7:7521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test77-reactive-sandbox-elasticsearch.test77|*.todo_inner_net.ru"
+
+.namespace_test78: &namespace_test78_def
+  environment:
+    name: test78
+  variables:
+    DOCKER_IMAGE_VERSION: 78-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-7:8521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test78-reactive-sandbox-elasticsearch.test78|*.todo_inner_net.ru"
+
+.namespace_test81: &namespace_test81_def
+  environment:
+    name: test81
+  variables:
+    DOCKER_IMAGE_VERSION: 81-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-8:1521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test81-reactive-sandbox-elasticsearch.test81|*.todo_inner_net.ru"
+
+.namespace_test82: &namespace_test82_def
+  environment:
+    name: test82
+  variables:
+    DOCKER_IMAGE_VERSION: 82-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-8:2521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test82-reactive-sandbox-elasticsearch.test82|*.todo_inner_net.ru"
+
+.namespace_test83: &namespace_test83_def
+  environment:
+    name: test83
+  variables:
+    DOCKER_IMAGE_VERSION: 83-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-8:3521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test83-reactive-sandbox-elasticsearch.test83|*.todo_inner_net.ru"
+
+.namespace_test84: &namespace_test84_def
+  environment:
+    name: test84
+  variables:
+    DOCKER_IMAGE_VERSION: 84-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-8:4521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test84-reactive-sandbox-elasticsearch.test84|*.todo_inner_net.ru"
+
+.namespace_test85: &namespace_test85_def
+  environment:
+    name: test85
+  variables:
+    DOCKER_IMAGE_VERSION: 85-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-8:5521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test85-reactive-sandbox-elasticsearch.test85|*.todo_inner_net.ru"
+
+.namespace_test86: &namespace_test86_def
+  environment:
+    name: test86
+  variables:
+    DOCKER_IMAGE_VERSION: 86-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-8:6521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test86-reactive-sandbox-elasticsearch.test86|*.todo_inner_net.ru"
+
+.namespace_test87: &namespace_test87_def
+  environment:
+    name: test87
+  variables:
+    DOCKER_IMAGE_VERSION: 87-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-8:7521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test87-reactive-sandbox-elasticsearch.test87|*.todo_inner_net.ru"
+
+.namespace_test88: &namespace_test88_def
+  environment:
+    name: test88
+  variables:
+    DOCKER_IMAGE_VERSION: 88-SNAPSHOT
+    DB_URL: "jdbc:oracle:thin:@//todo_test_server-db-8:8521/ORCLPDB1"
+    NON_PROXY_HOSTS: "localhost|reactive-sandbox-test88-reactive-sandbox-elasticsearch.test88|*.todo_inner_net.ru"
+
+Build [11]:
+  <<: *namespace_test11_def
+  <<: *build_def
+
+Install [11]:
+  <<: *namespace_test11_def
+  <<: *install_def
+
+Update [11]:
+  <<: *namespace_test11_def
+  <<: *update_def
+
+Delete [11]:
+  <<: *namespace_test11_def
+  <<: *delete_def
+
+Del ES index [11]:
+  <<: *namespace_test11_def
+  <<: *del_ES_index_def
+
+New ES index [11]:
+  <<: *namespace_test11_def
+  <<: *new_ES_index_def
+
+Build [12]:
+  <<: *namespace_test12_def
+  <<: *build_def
+
+Install [12]:
+  <<: *namespace_test12_def
+  <<: *install_def
+
+Update [12]:
+  <<: *namespace_test12_def
+  <<: *update_def
+
+Delete [12]:
+  <<: *namespace_test12_def
+  <<: *delete_def
+
+Del ES index [12]:
+  <<: *namespace_test12_def
+  <<: *del_ES_index_def
+
+New ES index [12]:
+  <<: *namespace_test12_def
+  <<: *new_ES_index_def
+
+Build [13]:
+  <<: *namespace_test13_def
+  <<: *build_def
+
+Install [13]:
+  <<: *namespace_test13_def
+  <<: *install_def
+
+Update [13]:
+  <<: *namespace_test13_def
+  <<: *update_def
+
+Delete [13]:
+  <<: *namespace_test13_def
+  <<: *delete_def
+
+Del ES index [13]:
+  <<: *namespace_test13_def
+  <<: *del_ES_index_def
+
+New ES index [13]:
+  <<: *namespace_test13_def
+  <<: *new_ES_index_def
+
+Build [14]:
+  <<: *namespace_test14_def
+  <<: *build_def
+
+Install [14]:
+  <<: *namespace_test14_def
+  <<: *install_def
+
+Update [14]:
+  <<: *namespace_test14_def
+  <<: *update_def
+
+Delete [14]:
+  <<: *namespace_test14_def
+  <<: *delete_def
+
+Del ES index [14]:
+  <<: *namespace_test14_def
+  <<: *del_ES_index_def
+
+New ES index [14]:
+  <<: *namespace_test14_def
+  <<: *new_ES_index_def
+
+Build [15]:
+  <<: *namespace_test15_def
+  <<: *build_def
+
+Install [15]:
+  <<: *namespace_test15_def
+  <<: *install_def
+
+Update [15]:
+  <<: *namespace_test15_def
+  <<: *update_def
+
+Delete [15]:
+  <<: *namespace_test15_def
+  <<: *delete_def
+
+Del ES index [15]:
+  <<: *namespace_test15_def
+  <<: *del_ES_index_def
+
+New ES index [15]:
+  <<: *namespace_test15_def
+  <<: *new_ES_index_def
+
+Build [16]:
+  <<: *namespace_test16_def
+  <<: *build_def
+
+Install [16]:
+  <<: *namespace_test16_def
+  <<: *install_def
+
+Update [16]:
+  <<: *namespace_test16_def
+  <<: *update_def
+
+Delete [16]:
+  <<: *namespace_test16_def
+  <<: *delete_def
+
+Del ES index [16]:
+  <<: *namespace_test16_def
+  <<: *del_ES_index_def
+
+New ES index [16]:
+  <<: *namespace_test16_def
+  <<: *new_ES_index_def
+
+Build [17]:
+  <<: *namespace_test17_def
+  <<: *build_def
+
+Install [17]:
+  <<: *namespace_test17_def
+  <<: *install_def
+
+Update [17]:
+  <<: *namespace_test17_def
+  <<: *update_def
+
+Delete [17]:
+  <<: *namespace_test17_def
+  <<: *delete_def
+
+Del ES index [17]:
+  <<: *namespace_test17_def
+  <<: *del_ES_index_def
+
+New ES index [17]:
+  <<: *namespace_test17_def
+  <<: *new_ES_index_def
+
+Build [18]:
+  <<: *namespace_test18_def
+  <<: *build_def
+
+Install [18]:
+  <<: *namespace_test18_def
+  <<: *install_def
+
+Update [18]:
+  <<: *namespace_test18_def
+  <<: *update_def
+
+Delete [18]:
+  <<: *namespace_test18_def
+  <<: *delete_def
+
+Del ES index [18]:
+  <<: *namespace_test18_def
+  <<: *del_ES_index_def
+
+New ES index [18]:
+  <<: *namespace_test18_def
+  <<: *new_ES_index_def
+
+Build [21]:
+  <<: *namespace_test21_def
+  <<: *build_def
+
+Install [21]:
+  <<: *namespace_test21_def
+  <<: *install_def
+
+Update [21]:
+  <<: *namespace_test21_def
+  <<: *update_def
+
+Delete [21]:
+  <<: *namespace_test21_def
+  <<: *delete_def
+
+Del ES index [21]:
+  <<: *namespace_test21_def
+  <<: *del_ES_index_def
+
+New ES index [21]:
+  <<: *namespace_test21_def
+  <<: *new_ES_index_def
+
+Build [22]:
+  <<: *namespace_test22_def
+  <<: *build_def
+
+Install [22]:
+  <<: *namespace_test22_def
+  <<: *install_def
+
+Update [22]:
+  <<: *namespace_test22_def
+  <<: *update_def
+
+Delete [22]:
+  <<: *namespace_test22_def
+  <<: *delete_def
+
+Del ES index [22]:
+  <<: *namespace_test22_def
+  <<: *del_ES_index_def
+
+New ES index [22]:
+  <<: *namespace_test22_def
+  <<: *new_ES_index_def
+
+Build [23]:
+  <<: *namespace_test23_def
+  <<: *build_def
+
+Install [23]:
+  <<: *namespace_test23_def
+  <<: *install_def
+
+Update [23]:
+  <<: *namespace_test23_def
+  <<: *update_def
+
+Delete [23]:
+  <<: *namespace_test23_def
+  <<: *delete_def
+
+Del ES index [23]:
+  <<: *namespace_test23_def
+  <<: *del_ES_index_def
+
+New ES index [23]:
+  <<: *namespace_test23_def
+  <<: *new_ES_index_def
+
+Build [24]:
+  <<: *namespace_test24_def
+  <<: *build_def
+
+Install [24]:
+  <<: *namespace_test24_def
+  <<: *install_def
+
+Update [24]:
+  <<: *namespace_test24_def
+  <<: *update_def
+
+Delete [24]:
+  <<: *namespace_test24_def
+  <<: *delete_def
+
+Del ES index [24]:
+  <<: *namespace_test24_def
+  <<: *del_ES_index_def
+
+New ES index [24]:
+  <<: *namespace_test24_def
+  <<: *new_ES_index_def
+
+Build [25]:
+  <<: *namespace_test25_def
+  <<: *build_def
+
+Install [25]:
+  <<: *namespace_test25_def
+  <<: *install_def
+
+Update [25]:
+  <<: *namespace_test25_def
+  <<: *update_def
+
+Delete [25]:
+  <<: *namespace_test25_def
+  <<: *delete_def
+
+Del ES index [25]:
+  <<: *namespace_test25_def
+  <<: *del_ES_index_def
+
+New ES index [25]:
+  <<: *namespace_test25_def
+  <<: *new_ES_index_def
+
+Build [26]:
+  <<: *namespace_test26_def
+  <<: *build_def
+
+Install [26]:
+  <<: *namespace_test26_def
+  <<: *install_def
+
+Update [26]:
+  <<: *namespace_test26_def
+  <<: *update_def
+
+Delete [26]:
+  <<: *namespace_test26_def
+  <<: *delete_def
+
+Del ES index [26]:
+  <<: *namespace_test26_def
+  <<: *del_ES_index_def
+
+New ES index [26]:
+  <<: *namespace_test26_def
+  <<: *new_ES_index_def
+
+Build [27]:
+  <<: *namespace_test27_def
+  <<: *build_def
+
+Install [27]:
+  <<: *namespace_test27_def
+  <<: *install_def
+
+Update [27]:
+  <<: *namespace_test27_def
+  <<: *update_def
+
+Delete [27]:
+  <<: *namespace_test27_def
+  <<: *delete_def
+
+Del ES index [27]:
+  <<: *namespace_test27_def
+  <<: *del_ES_index_def
+
+New ES index [27]:
+  <<: *namespace_test27_def
+  <<: *new_ES_index_def
+
+Build [28]:
+  <<: *namespace_test28_def
+  <<: *build_def
+
+Install [28]:
+  <<: *namespace_test28_def
+  <<: *install_def
+
+Update [28]:
+  <<: *namespace_test28_def
+  <<: *update_def
+
+Delete [28]:
+  <<: *namespace_test28_def
+  <<: *delete_def
+
+Del ES index [28]:
+  <<: *namespace_test28_def
+  <<: *del_ES_index_def
+
+New ES index [28]:
+  <<: *namespace_test28_def
+  <<: *new_ES_index_def
+
+Build [31]:
+  <<: *namespace_test31_def
+  <<: *build_def
+
+Install [31]:
+  <<: *namespace_test31_def
+  <<: *install_def
+
+Update [31]:
+  <<: *namespace_test31_def
+  <<: *update_def
+
+Delete [31]:
+  <<: *namespace_test31_def
+  <<: *delete_def
+
+Del ES index [31]:
+  <<: *namespace_test31_def
+  <<: *del_ES_index_def
+
+New ES index [31]:
+  <<: *namespace_test31_def
+  <<: *new_ES_index_def
+
+Build [32]:
+  <<: *namespace_test32_def
+  <<: *build_def
+
+Install [32]:
+  <<: *namespace_test32_def
+  <<: *install_def
+
+Update [32]:
+  <<: *namespace_test32_def
+  <<: *update_def
+
+Delete [32]:
+  <<: *namespace_test32_def
+  <<: *delete_def
+
+Del ES index [32]:
+  <<: *namespace_test32_def
+  <<: *del_ES_index_def
+
+New ES index [32]:
+  <<: *namespace_test32_def
+  <<: *new_ES_index_def
+
+Build [33]:
+  <<: *namespace_test33_def
+  <<: *build_def
+
+Install [33]:
+  <<: *namespace_test33_def
+  <<: *install_def
+
+Update [33]:
+  <<: *namespace_test33_def
+  <<: *update_def
+
+Delete [33]:
+  <<: *namespace_test33_def
+  <<: *delete_def
+
+Del ES index [33]:
+  <<: *namespace_test33_def
+  <<: *del_ES_index_def
+
+New ES index [33]:
+  <<: *namespace_test33_def
+  <<: *new_ES_index_def
+
+Build [34]:
+  <<: *namespace_test34_def
+  <<: *build_def
+
+Install [34]:
+  <<: *namespace_test34_def
+  <<: *install_def
+
+Update [34]:
+  <<: *namespace_test34_def
+  <<: *update_def
+
+Delete [34]:
+  <<: *namespace_test34_def
+  <<: *delete_def
+
+Del ES index [34]:
+  <<: *namespace_test34_def
+  <<: *del_ES_index_def
+
+New ES index [34]:
+  <<: *namespace_test34_def
+  <<: *new_ES_index_def
+
+Build [35]:
+  <<: *namespace_test35_def
+  <<: *build_def
+
+Install [35]:
+  <<: *namespace_test35_def
+  <<: *install_def
+
+Update [35]:
+  <<: *namespace_test35_def
+  <<: *update_def
+
+Delete [35]:
+  <<: *namespace_test35_def
+  <<: *delete_def
+
+Del ES index [35]:
+  <<: *namespace_test35_def
+  <<: *del_ES_index_def
+
+New ES index [35]:
+  <<: *namespace_test35_def
+  <<: *new_ES_index_def
+
+Build [36]:
+  <<: *namespace_test36_def
+  <<: *build_def
+
+Install [36]:
+  <<: *namespace_test36_def
+  <<: *install_def
+
+Update [36]:
+  <<: *namespace_test36_def
+  <<: *update_def
+
+Delete [36]:
+  <<: *namespace_test36_def
+  <<: *delete_def
+
+Del ES index [36]:
+  <<: *namespace_test36_def
+  <<: *del_ES_index_def
+
+New ES index [36]:
+  <<: *namespace_test36_def
+  <<: *new_ES_index_def
+
+Build [37]:
+  <<: *namespace_test37_def
+  <<: *build_def
+
+Install [37]:
+  <<: *namespace_test37_def
+  <<: *install_def
+
+Update [37]:
+  <<: *namespace_test37_def
+  <<: *update_def
+
+Delete [37]:
+  <<: *namespace_test37_def
+  <<: *delete_def
+
+Del ES index [37]:
+  <<: *namespace_test37_def
+  <<: *del_ES_index_def
+
+New ES index [37]:
+  <<: *namespace_test37_def
+  <<: *new_ES_index_def
+
+Build [38]:
+  <<: *namespace_test38_def
+  <<: *build_def
+
+Install [38]:
+  <<: *namespace_test38_def
+  <<: *install_def
+
+Update [38]:
+  <<: *namespace_test38_def
+  <<: *update_def
+
+Delete [38]:
+  <<: *namespace_test38_def
+  <<: *delete_def
+
+Del ES index [38]:
+  <<: *namespace_test38_def
+  <<: *del_ES_index_def
+
+New ES index [38]:
+  <<: *namespace_test38_def
+  <<: *new_ES_index_def
+
+Build [41]:
+  <<: *namespace_test41_def
+  <<: *build_def
+
+Install [41]:
+  <<: *namespace_test41_def
+  <<: *install_def
+
+Update [41]:
+  <<: *namespace_test41_def
+  <<: *update_def
+
+Delete [41]:
+  <<: *namespace_test41_def
+  <<: *delete_def
+
+Del ES index [41]:
+  <<: *namespace_test41_def
+  <<: *del_ES_index_def
+
+New ES index [41]:
+  <<: *namespace_test41_def
+  <<: *new_ES_index_def
+
+Build [42]:
+  <<: *namespace_test42_def
+  <<: *build_def
+
+Install [42]:
+  <<: *namespace_test42_def
+  <<: *install_def
+
+Update [42]:
+  <<: *namespace_test42_def
+  <<: *update_def
+
+Delete [42]:
+  <<: *namespace_test42_def
+  <<: *delete_def
+
+Del ES index [42]:
+  <<: *namespace_test42_def
+  <<: *del_ES_index_def
+
+New ES index [42]:
+  <<: *namespace_test42_def
+  <<: *new_ES_index_def
+
+Build [43]:
+  <<: *namespace_test43_def
+  <<: *build_def
+
+Install [43]:
+  <<: *namespace_test43_def
+  <<: *install_def
+
+Update [43]:
+  <<: *namespace_test43_def
+  <<: *update_def
+
+Delete [43]:
+  <<: *namespace_test43_def
+  <<: *delete_def
+
+Del ES index [43]:
+  <<: *namespace_test43_def
+  <<: *del_ES_index_def
+
+New ES index [43]:
+  <<: *namespace_test43_def
+  <<: *new_ES_index_def
+
+Build [44]:
+  <<: *namespace_test44_def
+  <<: *build_def
+
+Install [44]:
+  <<: *namespace_test44_def
+  <<: *install_def
+
+Update [44]:
+  <<: *namespace_test44_def
+  <<: *update_def
+
+Delete [44]:
+  <<: *namespace_test44_def
+  <<: *delete_def
+
+Del ES index [44]:
+  <<: *namespace_test44_def
+  <<: *del_ES_index_def
+
+New ES index [44]:
+  <<: *namespace_test44_def
+  <<: *new_ES_index_def
+
+Build [45]:
+  <<: *namespace_test45_def
+  <<: *build_def
+
+Install [45]:
+  <<: *namespace_test45_def
+  <<: *install_def
+
+Update [45]:
+  <<: *namespace_test45_def
+  <<: *update_def
+
+Delete [45]:
+  <<: *namespace_test45_def
+  <<: *delete_def
+
+Del ES index [45]:
+  <<: *namespace_test45_def
+  <<: *del_ES_index_def
+
+New ES index [45]:
+  <<: *namespace_test45_def
+  <<: *new_ES_index_def
+
+Build [46]:
+  <<: *namespace_test46_def
+  <<: *build_def
+
+Install [46]:
+  <<: *namespace_test46_def
+  <<: *install_def
+
+Update [46]:
+  <<: *namespace_test46_def
+  <<: *update_def
+
+Delete [46]:
+  <<: *namespace_test46_def
+  <<: *delete_def
+
+Del ES index [46]:
+  <<: *namespace_test46_def
+  <<: *del_ES_index_def
+
+New ES index [46]:
+  <<: *namespace_test46_def
+  <<: *new_ES_index_def
+
+Build [47]:
+  <<: *namespace_test47_def
+  <<: *build_def
+
+Install [47]:
+  <<: *namespace_test47_def
+  <<: *install_def
+
+Update [47]:
+  <<: *namespace_test47_def
+  <<: *update_def
+
+Delete [47]:
+  <<: *namespace_test47_def
+  <<: *delete_def
+
+Del ES index [47]:
+  <<: *namespace_test47_def
+  <<: *del_ES_index_def
+
+New ES index [47]:
+  <<: *namespace_test47_def
+  <<: *new_ES_index_def
+
+Build [48]:
+  <<: *namespace_test48_def
+  <<: *build_def
+
+Install [48]:
+  <<: *namespace_test48_def
+  <<: *install_def
+
+Update [48]:
+  <<: *namespace_test48_def
+  <<: *update_def
+
+Delete [48]:
+  <<: *namespace_test48_def
+  <<: *delete_def
+
+Del ES index [48]:
+  <<: *namespace_test48_def
+  <<: *del_ES_index_def
+
+New ES index [48]:
+  <<: *namespace_test48_def
+  <<: *new_ES_index_def
+
+Build [51]:
+  <<: *namespace_test51_def
+  <<: *build_def
+
+Install [51]:
+  <<: *namespace_test51_def
+  <<: *install_def
+
+Update [51]:
+  <<: *namespace_test51_def
+  <<: *update_def
+
+Delete [51]:
+  <<: *namespace_test51_def
+  <<: *delete_def
+
+Del ES index [51]:
+  <<: *namespace_test51_def
+  <<: *del_ES_index_def
+
+New ES index [51]:
+  <<: *namespace_test51_def
+  <<: *new_ES_index_def
+
+Build [52]:
+  <<: *namespace_test52_def
+  <<: *build_def
+
+Install [52]:
+  <<: *namespace_test52_def
+  <<: *install_def
+
+Update [52]:
+  <<: *namespace_test52_def
+  <<: *update_def
+
+Delete [52]:
+  <<: *namespace_test52_def
+  <<: *delete_def
+
+Del ES index [52]:
+  <<: *namespace_test52_def
+  <<: *del_ES_index_def
+
+New ES index [52]:
+  <<: *namespace_test52_def
+  <<: *new_ES_index_def
+
+Build [53]:
+  <<: *namespace_test53_def
+  <<: *build_def
+
+Install [53]:
+  <<: *namespace_test53_def
+  <<: *install_def
+
+Update [53]:
+  <<: *namespace_test53_def
+  <<: *update_def
+
+Delete [53]:
+  <<: *namespace_test53_def
+  <<: *delete_def
+
+Del ES index [53]:
+  <<: *namespace_test53_def
+  <<: *del_ES_index_def
+
+New ES index [53]:
+  <<: *namespace_test53_def
+  <<: *new_ES_index_def
+
+Build [54]:
+  <<: *namespace_test54_def
+  <<: *build_def
+
+Install [54]:
+  <<: *namespace_test54_def
+  <<: *install_def
+
+Update [54]:
+  <<: *namespace_test54_def
+  <<: *update_def
+
+Delete [54]:
+  <<: *namespace_test54_def
+  <<: *delete_def
+
+Del ES index [54]:
+  <<: *namespace_test54_def
+  <<: *del_ES_index_def
+
+New ES index [54]:
+  <<: *namespace_test54_def
+  <<: *new_ES_index_def
+
+Build [55]:
+  <<: *namespace_test55_def
+  <<: *build_def
+
+Install [55]:
+  <<: *namespace_test55_def
+  <<: *install_def
+
+Update [55]:
+  <<: *namespace_test55_def
+  <<: *update_def
+
+Delete [55]:
+  <<: *namespace_test55_def
+  <<: *delete_def
+
+Del ES index [55]:
+  <<: *namespace_test55_def
+  <<: *del_ES_index_def
+
+New ES index [55]:
+  <<: *namespace_test55_def
+  <<: *new_ES_index_def
+
+Build [56]:
+  <<: *namespace_test56_def
+  <<: *build_def
+
+Install [56]:
+  <<: *namespace_test56_def
+  <<: *install_def
+
+Update [56]:
+  <<: *namespace_test56_def
+  <<: *update_def
+
+Delete [56]:
+  <<: *namespace_test56_def
+  <<: *delete_def
+
+Del ES index [56]:
+  <<: *namespace_test56_def
+  <<: *del_ES_index_def
+
+New ES index [56]:
+  <<: *namespace_test56_def
+  <<: *new_ES_index_def
+
+Build [57]:
+  <<: *namespace_test57_def
+  <<: *build_def
+
+Install [57]:
+  <<: *namespace_test57_def
+  <<: *install_def
+
+Update [57]:
+  <<: *namespace_test57_def
+  <<: *update_def
+
+Delete [57]:
+  <<: *namespace_test57_def
+  <<: *delete_def
+
+Del ES index [57]:
+  <<: *namespace_test57_def
+  <<: *del_ES_index_def
+
+New ES index [57]:
+  <<: *namespace_test57_def
+  <<: *new_ES_index_def
+
+Build [58]:
+  <<: *namespace_test58_def
+  <<: *build_def
+
+Install [58]:
+  <<: *namespace_test58_def
+  <<: *install_def
+
+Update [58]:
+  <<: *namespace_test58_def
+  <<: *update_def
+
+Delete [58]:
+  <<: *namespace_test58_def
+  <<: *delete_def
+
+Del ES index [58]:
+  <<: *namespace_test58_def
+  <<: *del_ES_index_def
+
+New ES index [58]:
+  <<: *namespace_test58_def
+  <<: *new_ES_index_def
+
+Build [61]:
+  <<: *namespace_test61_def
+  <<: *build_def
+
+Install [61]:
+  <<: *namespace_test61_def
+  <<: *install_def
+
+Update [61]:
+  <<: *namespace_test61_def
+  <<: *update_def
+
+Delete [61]:
+  <<: *namespace_test61_def
+  <<: *delete_def
+
+Del ES index [61]:
+  <<: *namespace_test61_def
+  <<: *del_ES_index_def
+
+New ES index [61]:
+  <<: *namespace_test61_def
+  <<: *new_ES_index_def
+
+Build [62]:
+  <<: *namespace_test62_def
+  <<: *build_def
+
+Install [62]:
+  <<: *namespace_test62_def
+  <<: *install_def
+
+Update [62]:
+  <<: *namespace_test62_def
+  <<: *update_def
+
+Delete [62]:
+  <<: *namespace_test62_def
+  <<: *delete_def
+
+Del ES index [62]:
+  <<: *namespace_test62_def
+  <<: *del_ES_index_def
+
+New ES index [62]:
+  <<: *namespace_test62_def
+  <<: *new_ES_index_def
+
+Build [63]:
+  <<: *namespace_test63_def
+  <<: *build_def
+
+Install [63]:
+  <<: *namespace_test63_def
+  <<: *install_def
+
+Update [63]:
+  <<: *namespace_test63_def
+  <<: *update_def
+
+Delete [63]:
+  <<: *namespace_test63_def
+  <<: *delete_def
+
+Del ES index [63]:
+  <<: *namespace_test63_def
+  <<: *del_ES_index_def
+
+New ES index [63]:
+  <<: *namespace_test63_def
+  <<: *new_ES_index_def
+
+Build [64]:
+  <<: *namespace_test64_def
+  <<: *build_def
+
+Install [64]:
+  <<: *namespace_test64_def
+  <<: *install_def
+
+Update [64]:
+  <<: *namespace_test64_def
+  <<: *update_def
+
+Delete [64]:
+  <<: *namespace_test64_def
+  <<: *delete_def
+
+Del ES index [64]:
+  <<: *namespace_test64_def
+  <<: *del_ES_index_def
+
+New ES index [64]:
+  <<: *namespace_test64_def
+  <<: *new_ES_index_def
+
+Build [65]:
+  <<: *namespace_test65_def
+  <<: *build_def
+
+Install [65]:
+  <<: *namespace_test65_def
+  <<: *install_def
+
+Update [65]:
+  <<: *namespace_test65_def
+  <<: *update_def
+
+Delete [65]:
+  <<: *namespace_test65_def
+  <<: *delete_def
+
+Del ES index [65]:
+  <<: *namespace_test65_def
+  <<: *del_ES_index_def
+
+New ES index [65]:
+  <<: *namespace_test65_def
+  <<: *new_ES_index_def
+
+Build [66]:
+  <<: *namespace_test66_def
+  <<: *build_def
+
+Install [66]:
+  <<: *namespace_test66_def
+  <<: *install_def
+
+Update [66]:
+  <<: *namespace_test66_def
+  <<: *update_def
+
+Delete [66]:
+  <<: *namespace_test66_def
+  <<: *delete_def
+
+Del ES index [66]:
+  <<: *namespace_test66_def
+  <<: *del_ES_index_def
+
+New ES index [66]:
+  <<: *namespace_test66_def
+  <<: *new_ES_index_def
+
+Build [67]:
+  <<: *namespace_test67_def
+  <<: *build_def
+
+Install [67]:
+  <<: *namespace_test67_def
+  <<: *install_def
+
+Update [67]:
+  <<: *namespace_test67_def
+  <<: *update_def
+
+Delete [67]:
+  <<: *namespace_test67_def
+  <<: *delete_def
+
+Del ES index [67]:
+  <<: *namespace_test67_def
+  <<: *del_ES_index_def
+
+New ES index [67]:
+  <<: *namespace_test67_def
+  <<: *new_ES_index_def
+
+Build [68]:
+  <<: *namespace_test68_def
+  <<: *build_def
+
+Install [68]:
+  <<: *namespace_test68_def
+  <<: *install_def
+
+Update [68]:
+  <<: *namespace_test68_def
+  <<: *update_def
+
+Delete [68]:
+  <<: *namespace_test68_def
+  <<: *delete_def
+
+Del ES index [68]:
+  <<: *namespace_test68_def
+  <<: *del_ES_index_def
+
+New ES index [68]:
+  <<: *namespace_test68_def
+  <<: *new_ES_index_def
+
+Build [71]:
+  <<: *namespace_test71_def
+  <<: *build_def
+
+Install [71]:
+  <<: *namespace_test71_def
+  <<: *install_def
+
+Update [71]:
+  <<: *namespace_test71_def
+  <<: *update_def
+
+Delete [71]:
+  <<: *namespace_test71_def
+  <<: *delete_def
+
+Del ES index [71]:
+  <<: *namespace_test71_def
+  <<: *del_ES_index_def
+
+New ES index [71]:
+  <<: *namespace_test71_def
+  <<: *new_ES_index_def
+
+Build [72]:
+  <<: *namespace_test72_def
+  <<: *build_def
+
+Install [72]:
+  <<: *namespace_test72_def
+  <<: *install_def
+
+Update [72]:
+  <<: *namespace_test72_def
+  <<: *update_def
+
+Delete [72]:
+  <<: *namespace_test72_def
+  <<: *delete_def
+
+Del ES index [72]:
+  <<: *namespace_test72_def
+  <<: *del_ES_index_def
+
+New ES index [72]:
+  <<: *namespace_test72_def
+  <<: *new_ES_index_def
+
+Build [73]:
+  <<: *namespace_test73_def
+  <<: *build_def
+
+Install [73]:
+  <<: *namespace_test73_def
+  <<: *install_def
+
+Update [73]:
+  <<: *namespace_test73_def
+  <<: *update_def
+
+Delete [73]:
+  <<: *namespace_test73_def
+  <<: *delete_def
+
+Del ES index [73]:
+  <<: *namespace_test73_def
+  <<: *del_ES_index_def
+
+New ES index [73]:
+  <<: *namespace_test73_def
+  <<: *new_ES_index_def
+
+Build [74]:
+  <<: *namespace_test74_def
+  <<: *build_def
+
+Install [74]:
+  <<: *namespace_test74_def
+  <<: *install_def
+
+Update [74]:
+  <<: *namespace_test74_def
+  <<: *update_def
+
+Delete [74]:
+  <<: *namespace_test74_def
+  <<: *delete_def
+
+Del ES index [74]:
+  <<: *namespace_test74_def
+  <<: *del_ES_index_def
+
+New ES index [74]:
+  <<: *namespace_test74_def
+  <<: *new_ES_index_def
+
+Build [75]:
+  <<: *namespace_test75_def
+  <<: *build_def
+
+Install [75]:
+  <<: *namespace_test75_def
+  <<: *install_def
+
+Update [75]:
+  <<: *namespace_test75_def
+  <<: *update_def
+
+Delete [75]:
+  <<: *namespace_test75_def
+  <<: *delete_def
+
+Del ES index [75]:
+  <<: *namespace_test75_def
+  <<: *del_ES_index_def
+
+New ES index [75]:
+  <<: *namespace_test75_def
+  <<: *new_ES_index_def
+
+Build [76]:
+  <<: *namespace_test76_def
+  <<: *build_def
+
+Install [76]:
+  <<: *namespace_test76_def
+  <<: *install_def
+
+Update [76]:
+  <<: *namespace_test76_def
+  <<: *update_def
+
+Delete [76]:
+  <<: *namespace_test76_def
+  <<: *delete_def
+
+Del ES index [76]:
+  <<: *namespace_test76_def
+  <<: *del_ES_index_def
+
+New ES index [76]:
+  <<: *namespace_test76_def
+  <<: *new_ES_index_def
+
+Build [77]:
+  <<: *namespace_test77_def
+  <<: *build_def
+
+Install [77]:
+  <<: *namespace_test77_def
+  <<: *install_def
+
+Update [77]:
+  <<: *namespace_test77_def
+  <<: *update_def
+
+Delete [77]:
+  <<: *namespace_test77_def
+  <<: *delete_def
+
+Del ES index [77]:
+  <<: *namespace_test77_def
+  <<: *del_ES_index_def
+
+New ES index [77]:
+  <<: *namespace_test77_def
+  <<: *new_ES_index_def
+
+Build [78]:
+  <<: *namespace_test78_def
+  <<: *build_def
+
+Install [78]:
+  <<: *namespace_test78_def
+  <<: *install_def
+
+Update [78]:
+  <<: *namespace_test78_def
+  <<: *update_def
+
+Delete [78]:
+  <<: *namespace_test78_def
+  <<: *delete_def
+
+Del ES index [78]:
+  <<: *namespace_test78_def
+  <<: *del_ES_index_def
+
+New ES index [78]:
+  <<: *namespace_test78_def
+  <<: *new_ES_index_def
+
+Build [81]:
+  <<: *namespace_test81_def
+  <<: *build_def
+
+Install [81]:
+  <<: *namespace_test81_def
+  <<: *install_def
+
+Update [81]:
+  <<: *namespace_test81_def
+  <<: *update_def
+
+Delete [81]:
+  <<: *namespace_test81_def
+  <<: *delete_def
+
+Del ES index [81]:
+  <<: *namespace_test81_def
+  <<: *del_ES_index_def
+
+New ES index [81]:
+  <<: *namespace_test81_def
+  <<: *new_ES_index_def
+
+Build [82]:
+  <<: *namespace_test82_def
+  <<: *build_def
+
+Install [82]:
+  <<: *namespace_test82_def
+  <<: *install_def
+
+Update [82]:
+  <<: *namespace_test82_def
+  <<: *update_def
+
+Delete [82]:
+  <<: *namespace_test82_def
+  <<: *delete_def
+
+Del ES index [82]:
+  <<: *namespace_test82_def
+  <<: *del_ES_index_def
+
+New ES index [82]:
+  <<: *namespace_test82_def
+  <<: *new_ES_index_def
+
+Build [83]:
+  <<: *namespace_test83_def
+  <<: *build_def
+
+Install [83]:
+  <<: *namespace_test83_def
+  <<: *install_def
+
+Update [83]:
+  <<: *namespace_test83_def
+  <<: *update_def
+
+Delete [83]:
+  <<: *namespace_test83_def
+  <<: *delete_def
+
+Del ES index [83]:
+  <<: *namespace_test83_def
+  <<: *del_ES_index_def
+
+New ES index [83]:
+  <<: *namespace_test83_def
+  <<: *new_ES_index_def
+
+Build [84]:
+  <<: *namespace_test84_def
+  <<: *build_def
+
+Install [84]:
+  <<: *namespace_test84_def
+  <<: *install_def
+
+Update [84]:
+  <<: *namespace_test84_def
+  <<: *update_def
+
+Delete [84]:
+  <<: *namespace_test84_def
+  <<: *delete_def
+
+Del ES index [84]:
+  <<: *namespace_test84_def
+  <<: *del_ES_index_def
+
+New ES index [84]:
+  <<: *namespace_test84_def
+  <<: *new_ES_index_def
+
+Build [85]:
+  <<: *namespace_test85_def
+  <<: *build_def
+
+Install [85]:
+  <<: *namespace_test85_def
+  <<: *install_def
+
+Update [85]:
+  <<: *namespace_test85_def
+  <<: *update_def
+
+Delete [85]:
+  <<: *namespace_test85_def
+  <<: *delete_def
+
+Del ES index [85]:
+  <<: *namespace_test85_def
+  <<: *del_ES_index_def
+
+New ES index [85]:
+  <<: *namespace_test85_def
+  <<: *new_ES_index_def
+
+Build [86]:
+  <<: *namespace_test86_def
+  <<: *build_def
+
+Install [86]:
+  <<: *namespace_test86_def
+  <<: *install_def
+
+Update [86]:
+  <<: *namespace_test86_def
+  <<: *update_def
+
+Delete [86]:
+  <<: *namespace_test86_def
+  <<: *delete_def
+
+Del ES index [86]:
+  <<: *namespace_test86_def
+  <<: *del_ES_index_def
+
+New ES index [86]:
+  <<: *namespace_test86_def
+  <<: *new_ES_index_def
+
+Build [87]:
+  <<: *namespace_test87_def
+  <<: *build_def
+
+Install [87]:
+  <<: *namespace_test87_def
+  <<: *install_def
+
+Update [87]:
+  <<: *namespace_test87_def
+  <<: *update_def
+
+Delete [87]:
+  <<: *namespace_test87_def
+  <<: *delete_def
+
+Del ES index [87]:
+  <<: *namespace_test87_def
+  <<: *del_ES_index_def
+
+New ES index [87]:
+  <<: *namespace_test87_def
+  <<: *new_ES_index_def
+
+Build [88]:
+  <<: *namespace_test88_def
+  <<: *build_def
+
+Install [88]:
+  <<: *namespace_test88_def
+  <<: *install_def
+
+Update [88]:
+  <<: *namespace_test88_def
+  <<: *update_def
+
+Delete [88]:
+  <<: *namespace_test88_def
+  <<: *delete_def
+
+Del ES index [88]:
+  <<: *namespace_test88_def
+  <<: *del_ES_index_def
+
+New ES index [88]:
+  <<: *namespace_test88_def
+  <<: *new_ES_index_def

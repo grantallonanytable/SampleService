@@ -1,0 +1,200 @@
+{
+  "mappings": {
+    "order": {
+      "properties": {
+        "cancelReason": {
+          "type": "keyword"
+        },
+        "city": {
+          "type": "keyword"
+        },
+        "clientEmail": {
+          "type": "text",
+          "analyzer": "russian"
+        },
+        "clientName": {
+          "type": "text",
+          "analyzer": "russian"
+        },
+        "clientPhone": {
+          "type": "text",
+          "analyzer": "russian"
+        },
+        "comment": {
+          "type": "text",
+          "analyzer": "russian"
+        },
+        "creationDate": {
+          "type": "date"
+        },
+        "id": {
+          "type": "keyword"
+        },
+        "mnp": {
+          "type": "text",
+          "analyzer": "russian"
+        },
+        "network": {
+          "type": "text",
+          "analyzer": "russian"
+        },
+        "orderComposition": {
+          "properties": {
+            "item": {
+              "properties": {
+                "commerceId": {
+                  "type": "keyword",
+                  "copy_to": "orderCompositionAggregated"
+                },
+                "catalogId": {
+                  "properties": {
+                    "productId": {
+                      "type": "keyword"
+                    },
+                    "skuId": {
+                      "type": "keyword"
+                    },
+                    "serialId": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "type": {
+                  "type": "keyword",
+                  "copy_to": "orderCompositionAggregated"
+                },
+                "frontName": {
+                  "type": "text",
+                  "analyzer": "russian",
+                  "copy_to": "orderCompositionAggregated"
+                },
+                "mnp": {
+                  "type": "text",
+                  "analyzer": "russian"
+                },
+                "amount": {
+                  "type": "long"
+                },
+                "price": {
+                  "properties": {
+                    "amount": {
+                      "type": "float"
+                    },
+                    "currency": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "salePrice": {
+                  "properties": {
+                    "amount": {
+                      "type": "float"
+                    },
+                    "currency": {
+                      "type": "keyword"
+                    }
+                  }
+                }
+              }
+            },
+            "subItem": {
+              "properties": {
+                "commerceId": {
+                  "type": "keyword",
+                  "copy_to": "orderCompositionAggregated"
+                },
+                "catalogId": {
+                  "properties": {
+                    "productId": {
+                      "type": "keyword"
+                    },
+                    "skuId": {
+                      "type": "keyword"
+                    },
+                    "serialId": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "type": {
+                  "type": "keyword",
+                  "copy_to": "orderCompositionAggregated"
+                },
+                "frontName": {
+                  "type": "text",
+                  "analyzer": "russian",
+                  "copy_to": "orderCompositionAggregated"
+                },
+                "amount": {
+                  "type": "long"
+                },
+                "price": {
+                  "properties": {
+                    "amount": {
+                      "type": "float"
+                    },
+                    "currency": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "salePrice": {
+                  "properties": {
+                    "amount": {
+                      "type": "float"
+                    },
+                    "currency": {
+                      "type": "keyword"
+                    }
+                  }
+                }
+              }
+            },
+            "itemState": {
+              "type": "keyword"
+            }
+          }
+        },
+        "orderState": {
+          "type": "keyword"
+        },
+        "orderType": {
+          "type": "keyword"
+        },
+        "parentNetwork": {
+          "type": "text",
+          "analyzer": "russian"
+        },
+        "partner": {
+          "type": "text",
+          "analyzer": "russian"
+        },
+        "payState": {
+          "type": "keyword"
+        },
+        "payType": {
+          "type": "keyword"
+        },
+        "promo": {
+          "type": "keyword"
+        },
+        "region": {
+          "type": "keyword"
+        },
+        "salePointId": {
+          "type": "keyword"
+        },
+        "shipGroupType": {
+          "type": "long"
+        },
+        "totalPrice": {
+          "type": "float"
+        },
+        "trackNumber": {
+          "type": "text",
+          "analyzer": "russian"
+        }
+      }
+    }
+  }
+}

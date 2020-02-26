@@ -1,0 +1,623 @@
+openapi: 3.0.0
+info:
+  version: 1.0.0-SNAPSHOT
+  title: Сервис заказов
+paths:
+  /sampleService/orders/:
+    post:
+      tags:
+      - orders
+      summary: Запрос информации о заказах
+      description: Запрос информации о заказах
+      responses:
+        '200':
+          description: Успешный запрос
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FindOrdersResponse'
+        '400':
+          description: Отсутсвует обязательный параметр
+        '403':
+          description: Доступ запрещен
+        '500':
+          description: Системное исключение
+        '509':
+          description: Превышен лимит времени на запрос
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FindOrdersRequest'
+        description: Фильтр поиска заказов
+#######################################
+#######################################
+  /sampleService/order/{id}:
+    get:
+      tags:
+      - orders
+      summary: Запрос информации о заказе
+      description: Запрос информации о заказе
+      parameters:
+      - in: path
+        name: id
+        description: id заказа
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Успешный запрос
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderCard'
+        '404':
+          description: Заказ не найден
+        '403':
+          description: Доступ запрещен
+        '500':
+          description: Системное исключение
+        '509':
+          description: Превышен лимит времени на запрос
+#######################################
+#######################################
+components:
+  schemas:
+    FindOrdersRequest:
+      type: object
+      description: Параметры для поиска заказов
+      properties:
+        id:
+          type: string
+          description: id заказа
+          example: '600800002811085'
+        siteId:
+          type: string
+          description: slug
+          example: 'msk'
+        dateFrom:
+          type: string
+          description: 'Дата с (указание, начиная с какой даты вывести заказы)'
+          example: '2017-08-25T15:05:24+01:00'
+        dateTo:
+          type: string
+          description: 'Дата по (указание, до какой даты вывести заказы)'
+          example: '2017-08-25T15:05:24+01:00'
+        timeFrom:
+          type: string
+          description: 'Время с (в течение каждых суток)'
+          example: '15:05:24'
+        timeTo:
+          type: string
+          description: 'Время по (в течение каждых суток)'
+          example: '15:05:24'
+        state:
+          type: string
+          description: Статус заказа
+          example: 'NEW'
+        type:
+          type: string
+          description: Тип заказа
+          example: 'virtual showcase'
+        deliveryId:
+          type: string
+          description: id службы доставки
+          example: '120013'
+        trackNumber:
+          type: string
+          description: Номер присвойки/РПО из транспортной компании
+          example: 'RTE43242DSAFDSAFJASF'
+        cityId:
+          type: string
+          description: Код населенного пункта
+          example: '1234'
+        shipGroupType:
+          type: number
+          description: Способ получения заказа
+          example: 5003
+        salePointId:
+          type: string
+          description: Код точки продаж
+          example: '300015'
+        clientName:
+          type: string
+          description: ФИО Клиента
+          example: 'Иванов Иван Иванович'
+        clientEmail:
+          type: string
+          description: email клиента
+          example: 'example@examle.ua'
+        clientPhone:
+          type: string
+          description: Контактный номер клиента
+          example: '9775255919'
+        paymentType:
+          type: string
+          description: Способ оплаты заказа
+          example: 'Наличные'
+        paymentState:
+          type: string
+          description: Статус оплаты заказа
+          example: 'Не оплачен'
+        orderComposition:
+          type: string
+          description: Состав заказа
+          example: 'samsung galaxy s9'
+        parentNetwork:
+          type: string
+          description: Родительская сеть
+          example: 'virtual network'
+        network:
+          type: string
+          description: Сеть
+          example: 'partner network'
+        partner:
+          type: string
+          description: Партнер
+          example: 'digital network'
+        comment:
+          type: string
+          description: Комментарий к заказу
+          example: 'тел. 987744'
+        cancelReason:
+          type: string
+          description: Причина отмены заказа
+          example: 'cancelByCustomer'
+        checkMnp:
+          type: boolean
+          description: Признак mnp [false|true]
+          example: true
+        checkPromo:
+          type: boolean
+          description: Признак наличия промокода [false|true]
+          example: true
+        page:
+          type: number
+          description: Номер страницы с заказами
+          example: 0
+        pageSize:
+          type: number
+          description: Размер страницы с заказами
+          example: 20
+#######################################
+#######################################
+    FindOrdersResponse:
+      type: object
+      description: Ответ на запрос поиска заказов
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Order'
+        totalPages:
+          type: integer
+          description: Количество страниц
+          example: 100
+#######################################
+#######################################
+    Order:
+      type: object
+      description: Информация о заказе
+      properties:
+        id:
+          type: string
+          description: id заказа
+          example: '600800002811085'
+        creationDate:
+          type: string
+          description: Дата заказа
+          example: '2017-08-25T15:05:24+01:00'
+        state:
+          type: string
+          description: Статус заказа
+          example: 'NEW'
+        type:
+          type: string
+          description: Тип заказа
+          example: 'virtual showcase'
+        siteId:
+          type: string
+          description: slug
+          example: 'msk'
+        clientName:
+          type: string
+          description: ФИО Клиента
+          example: 'Иванов Иван Иванович'
+        totalPrice:
+          $ref: '#/components/schemas/MonetaryAmount'
+        payment:
+          $ref: '#/components/schemas/Payment'
+        comment:
+          type: string
+          description: Комментарий к заказу
+          example: 'тел. 98774'
+        mnp:
+          type: string
+          description: Номер для переноса
+          example: '+79690146374'
+        delivery:
+          $ref: '#/components/schemas/Delivery'
+#######################################
+#######################################
+    OrderCard:
+      type: object
+      description: Информация о заказе
+      properties:
+        id:
+          type: string
+          description: id заказа
+          example: '600800002811085'
+        creationDate:
+          type: string
+          description: Дата заказа
+          example: '2017-08-25T15:05:24+01:00'
+        state:
+          type: string
+          description: Статус заказа
+          example: 'NEW'
+        type:
+          type: string
+          description: Тип заказа
+          example: 'virtual showcase'
+        siteId:
+          type: string
+          description: slug
+          example: 'msk'
+        totalPrice:
+          $ref: '#/components/schemas/MonetaryAmount'
+        payment:
+          $ref: '#/components/schemas/Payment'
+        comment:
+          type: string
+          description: Комментарий к заказу
+          example: 'тел. 98774'
+        mnp:
+          type: string
+          description: Номер для переноса
+          example: '+79690146374'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderCompositionItem'
+        promo:
+          type: string
+          description: Промокод
+          example: 'DFSA3247DSSAA66'
+        parentNetwork:
+          type: string
+          description: Родительская сеть
+          example: 'virtual network'
+        network:
+          type: string
+          description: Сеть
+          example: 'partner network'
+        partner:
+          type: string
+          description: Партнер
+          example: 'digital network'
+        cancelReason:
+          type: string
+          description: Причина отмены заказа
+          example: 'cancelByCustomer'
+        deliveryCard:
+          $ref: '#/components/schemas/DeliveryCard'
+        client:
+          $ref: '#/components/schemas/Client'
+#######################################
+#######################################
+    Payment:
+      type: object
+      description: Информация об оплате
+      properties:
+        type:
+          type: string
+          description: Способ оплаты заказа
+          example: 'Наличные'
+        state:
+          type: string
+          description: Статус оплаты заказа
+          example: 'Не оплачен'
+#######################################
+#######################################
+    OrderCompositionItem:
+      type: object
+      description: Элемент списка состава заказа
+      properties:
+        item:
+          $ref: '#/components/schemas/SkuItem'
+        subItem:
+          $ref: '#/components/schemas/SkuSubItem'
+        itemState:
+          type: string
+          description: Статус продукта
+          enum: [CART_ADDED, RESERVED, UNAVAILABLE_TO_RESERVE, PURCHASED, CANCEL]
+#######################################
+#######################################
+    SkuItem:
+      type: object
+      description: Характеристика продукта
+      properties:
+        commerceId:
+          type: string
+          description: Идентификатор commerceId продукта
+          example: 'ci880005064'
+        catalogId:
+          $ref: '#/components/schemas/CatalogId'
+        type:
+          type: string
+          description: Тип товара
+          example: 'msisdn'
+        frontName:
+          type: string
+          description: Название товара (msisdn или frontName)
+          example: '79778346528'
+        mnp:
+          type: string
+          description: Номер для переноса
+          example: '+79690146374'
+        amount:
+          type: integer
+          description: Количество единиц товара
+          example: 1
+        price:
+          $ref: '#/components/schemas/MonetaryAmount'
+        salePrice:
+          $ref: '#/components/schemas/MonetaryAmount'
+#######################################
+#######################################
+    SkuSubItem:
+      type: object
+      description: Характеристика продукта
+      properties:
+        commerceId:
+          type: string
+          description: Идентификатор commerceId продукта
+          example: 'ci880005064'
+        catalogId:
+          $ref: '#/components/schemas/CatalogId'
+        type:
+          type: string
+          description: Тип товара
+          example: 'msisdn'
+        frontName:
+          type: string
+          description: Название товара (msisdn или frontName)
+          example: '79778346528'
+        amount:
+          type: integer
+          description: Количество единиц товара
+          example: 1
+        price:
+          $ref: '#/components/schemas/MonetaryAmount'
+        salePrice:
+          $ref: '#/components/schemas/MonetaryAmount'
+#######################################
+#######################################
+    CatalogId:
+      type: object
+      description: Характеристика catalogId продукта
+      properties:
+        productId:
+          type: string
+          description: Идентификатор продукта
+          example: 'prod1500853'
+        skuId:
+          type: string
+          description: Идентификатор sku
+          example: 'sku1250145'
+        serialId:
+          type: string
+          description: Идентификатор serialId продукта
+          example: '79778346528'
+#######################################
+#######################################
+    MonetaryAmount:
+      type: object
+      description: Сумма в валюте
+      properties:
+        amount:
+          type: number
+          description: Сумма
+          example: 10.00
+        currency:
+          type: string
+          description: Валюта
+          example: 'RUB'
+#######################################
+#######################################
+    Delivery:
+      type: object
+      description: Краткие данные по доставке
+      properties:
+        id:
+          type: string
+          description: id службы доставки
+          example: '120002'
+        name:
+          type: string
+          description: Название службы доставки
+          example: 'Курьер Сервис Экспресс'
+        shipGroupType:
+          type: number
+          description: Способ получения заказа
+          example: 5003
+        cityId:
+          type: string
+          description: Код населенного пункта
+          example: '123'
+        salePointId:
+          type: string
+          description: Код точки продаж
+          example: '300015'
+        salePointAddress:
+          type: string
+          description: Адрес точки продаж
+          example: 'Ул. Громова, д. 56, кв. 48'
+        trackNumber:
+          type: string
+          description: Номер присвойки/РПО из транспортной компании
+          example: 'RTE43242DSAFDSAFJASF'
+#######################################
+#######################################
+    DeliveryCard:
+      type: object
+      description: Полные данные по доставке
+      properties:
+        id:
+          type: string
+          description: id службы доставки
+          example: '120002'
+        name:
+          type: string
+          description: Название службы доставки
+          example: 'Курьер Сервис Экспресс'
+        alias:
+          type: string
+          description: Алиас службы доставки
+          example: 'cse'
+        shipGroupType:
+          type: number
+          description: Способ получения заказа
+          example: 5003
+        cityId:
+          type: string
+          description: Код населенного пункта
+          example: '1234'
+        trackNumber:
+          type: string
+          description: Номер присвойки/РПО из транспортной компании
+          example: 'RTE43242DSAFDSAFJASF'
+        tariffZone:
+          $ref: '#/components/schemas/TariffZone'
+        salePoint:
+          $ref: '#/components/schemas/SalePoint'
+        courierInfo:
+          description: Адрес для курьерской доставки
+          $ref: '#/components/schemas/Address'
+#######################################
+#######################################
+    TariffZone:
+      type: object
+      description: Описание тарифной зоны
+      properties:
+        id:
+          type: string
+          description: Код тарифной зоны
+          example: '123'
+        name:
+          type: string
+          description: Название тарифной зоны
+          example: 'КСЭ Ярославль'
+        deliveryTimeDesc:
+          type: string
+          description: Описание срока доставки
+          example: '1-2 дня'
+        cost:
+          description: Стоимость доставки
+          $ref: '#/components/schemas/MonetaryAmount'
+#######################################
+#######################################
+    SalePoint:
+      type: object
+      description: Точка продаж
+      properties:
+        id:
+          type: string
+          description: Код точки продаж
+          example: '300015'
+        address:
+          type: string
+          description: Адрес точки продаж
+          example: 'Ул. Громова, д. 56, кв. 48'
+#######################################
+#######################################
+    Client:
+      type: object
+      description: Информация о клиенте
+      properties:
+        name:
+          type: string
+          description: Имя клиента
+          example: 'Иванов Иван Иванович'
+        gender:
+          type: string
+          description: Пол
+          enum: [male, female]
+        phone:
+          type: string
+          description: Контактный номер клиента
+          example: '79690145533'
+        email:
+          type: string
+          description: email клиента
+          example: 'example@examle.ua'
+        identityCard:
+          $ref: '#/components/schemas/IdentityCard'
+        address:
+          description: Адрес прописки
+          $ref: '#/components/schemas/Address'
+#######################################
+#######################################
+    Address:
+      type: object
+      description: Адрес
+      properties:
+        postalCode:
+          type: string
+          description: Почтовый индекс
+          example: '150001'
+        city:
+          type: string
+          description: Населенный пункт
+          example: 'Ярославль'
+        street:
+          type: string
+          description: Улица
+          example: 'Ул. Громова'
+        building:
+          type: string
+          description: Номер дома
+          example: '56'
+        apartment:
+          type: string
+          description: Номер квартиры
+          example: '48'
+#######################################
+#######################################
+    IdentityCard:
+      type: object
+      description: Дополнительная информация о клиенте
+      properties:
+        type:
+          type: string
+          description: Тип документа
+          example: 'russian_passport'
+        series:
+          type: string
+          description: Серия паспорта
+          example: '7899'
+        number:
+          type: string
+          description: Номер паспорта
+          example: '868999'
+        issuedBy:
+          type: string
+          description: Кем выдан
+          example: 'Отделом УФМС России по Ярославской области в Ленинском районе города Ярославль'
+        issuedOn:
+          type: string
+          description: Дата выдачи паспорта
+          example: '2017-08-25'
+        issuedCode:
+          type: string
+          description: Код подразделения
+          example: '111-222'
+        birthday:
+          type: string
+          description: Дата рождения клиента
+          example: '1991-06-29'
+        placeOfBirth:
+          type: string
+          description: Место рождения
+          example: 'Ярославль'

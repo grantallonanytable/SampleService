@@ -1,0 +1,9 @@
+apiVersion: v1
+data:
+  conf: |
+    play.http.secret.key = "play-http-secret-key-test"
+    akka.discovery.kubernetes-api.pod-domain = "k8s.test"
+  logstash: ""
+kind: ConfigMap
+metadata:
+  name: sampleService-config

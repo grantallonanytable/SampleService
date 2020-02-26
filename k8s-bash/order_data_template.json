@@ -1,0 +1,47 @@
+{
+  "cancelReason": "cancel reason %s",
+  "city": "city %s",
+  "clientEmail": "%s",
+  "clientName": "client name %s",
+  "clientPhone": "%s",
+  "comment": "%s",
+  "creationDate": "%s",
+  "id": %s,
+  "attrFlag": %s,
+  "network": "network %s",
+  "orderComposition": [{
+     "item":       {
+        "articleNumber": "ordercomposition_comm_id_1",
+        "type": "%s",
+        "caption": "%s",
+        "attrFlag": "8-977-000-00-01",
+        "amount": 3,
+        "price":          {
+           "amount": 100,
+           "currency": "RUB"
+        },
+        "salePrice":          {
+           "amount": 99.99,
+           "currency": "RUB"
+        }
+     },
+     "subItem":       {
+        "articleNumber": "ordercomposition_sub_comm_id_1",
+        "caption": "ordercomposition_sub_front_1",
+        "amount": 2
+     }
+  }],
+  "orderState": "%s",
+  "orderType": "order type %s",
+  "parentNetwork": "parent network %s",
+  "partner": "partner %s",
+  "payState": "pay state %s",
+  "payType": "pay type %s",
+  "promo": "%s",
+  "region": "region %s",
+  "salePointAddress": "sale point address %s",
+  "salePointId": "sale point %s",
+  "shipGroupType": %s,
+  "totalPrice": %s,
+  "shpi": "shpi number %s"
+}

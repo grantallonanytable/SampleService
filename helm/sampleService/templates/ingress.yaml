@@ -1,0 +1,29 @@
+apiVersion: "extensions/v1beta1"
+kind: Ingress
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    app: {{ .Chart.Name }}
+  annotations:
+    {{- range $key, $value := .Values.ingress.annotations }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+spec:
+  rules:
+    - http:
+        paths:
+          - path: "/_sampleService/openapi"
+            backend:
+              serviceName: orders
+              servicePort: http
+          - path: "/sampleService/orders"
+            backend:
+              serviceName: orders
+              servicePort: http
+          - path: "/sampleService/order"
+            backend:
+              serviceName: orders
+              servicePort: http
+      {{- if .Values.ingress.host }}
+      host: {{ .Values.ingress.host | quote }}
+      {{- end}}
