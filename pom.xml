@@ -122,11 +122,10 @@
           </execution>
         </executions>
         <configuration>
-          <skip>true</skip>
+          <registry>packagecloud.io:443</registry>
           <images>
             <image>
-              <name>tele2-digital/orders:%l</name>
-              <registry>t2ru-ds-registry-01:8888</registry>
+              <name>dilvish13/sampleService:%l</name>
               <build>
                 <from>openjdk:8u201-jre-alpine</from>
                 <tags>
@@ -292,8 +291,12 @@
   </dependencyManagement>
   <repositories>
     <repository>
+      <id>oracleImageRepo</id>
+      <url>http://nexus.saas.hand-china.com/content/repositories/rdc/</url>
+    </repository>
+    <repository>
       <id>jcenter</id>
-      <url>https://jcenter.bintray.com/</url>
+      <url>https://jcenter.bintray1.com/</url>
     </repository>
     <repository>
       <id>snapshots-repo</id>
@@ -311,8 +314,8 @@
       <url>https://dl.bintray.com/tanukkii007/maven/</url>
     </repository>
     <repository>
-      <id>tele2-repo-releases</id>
-      <url>http://t2ru-ds-registry-01:8081/repository/maven-releases/</url>
+      <id>packagecloud-dilvish13-releases</id>
+      <url>https://packagecloud.io/dilvish13/SampleService</url>
       <releases>
         <enabled>true</enabled>
       </releases>
@@ -321,8 +324,8 @@
       </snapshots>
     </repository>
     <repository>
-      <id>tele2-repo-snapshots</id>
-      <url>http://t2ru-ds-registry-01:8081/repository/maven-snapshots/</url>
+      <id>packagecloud-dilvish13-shapshots</id>
+      <url>https://packagecloud.io/dilvish13/SampleService</url>
       <releases>
         <enabled>false</enabled>
       </releases>
@@ -332,16 +335,6 @@
       </snapshots>
     </repository>
   </repositories>
-  <!--distributionManagement>
-    <repository>
-      <id>tele2-repo</id>
-      <url>http://t2ru-ds-registry-01:8081/repository/maven-releases/</url>
-    </repository>
-    <snapshotRepository>
-      <id>tele2-repo</id>
-      <url>http://t2ru-ds-registry-01:8081/repository/maven-snapshots/</url>
-    </snapshotRepository>
-  </distributionManagement-->
   <distributionManagement>
   <repository>
     <id>packagecloud-dilvish13</id>
